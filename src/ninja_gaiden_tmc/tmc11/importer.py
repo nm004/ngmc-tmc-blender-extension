@@ -115,12 +115,6 @@ def import_tmc11(context, tmc):
 
     # We form an armature
     a = bpy.data.armatures.new(tmc_name)
-    c = a.collections.new('MOT')
-    a.collections.new('SUP')
-    a.collections.new('WGT')
-    a.collections.new('OPT')
-    a.collections.new('WPB')
-    c.is_solo = True
     armature_obj = bpy.data.objects.new(a.name, a)
     armature_obj.matrix_world  = axis_conversion(from_forward='-Z', from_up='Y').to_4x4()
     context.view_layer.layer_collection.collection.objects.link(armature_obj)
@@ -130,7 +124,6 @@ def import_tmc11(context, tmc):
     bpy.ops.object.mode_set(mode='EDIT')
     for c in tmc.nodelay.chunks:
         b = armature_obj.data.edit_bones.new(c.metadata.name.decode())
-        armature_obj.data.collections[b.name[:3]].assign(b)
         b.matrix = tmc.glblmtx.chunks[c.metadata.node_index]
     for c in tmc.nodelay.chunks:
         i = c.metadata.node_index
@@ -144,11 +137,19 @@ def import_tmc11(context, tmc):
     r.tail = (0, .075, 0)
     set_bone_tail(r)
     bpy.ops.object.mode_set(mode='OBJECT')
-    C = armature_obj.data.collections
-    for c in C:
-        if c and not len(c.bones):
-            C.remove(c)
     context.view_layer.objects.active = active_obj_saved
+
+    a = armature_obj.data
+    a.collections.new('MOT').is_solo = True
+    a.collections.new('SUP')
+    a.collections.new('WGT')
+    a.collections.new('OPT')
+    a.collections.new('WPB')
+    for b in a.bones:
+        a.collections[b.name[:3]].assign(b)
+    for c in a.collections.values():
+        if not len(c.bones):
+            a.collections.remove(c)
 
     # We form a mesh below
     m = bpy.data.meshes.new(tmc_name)
@@ -163,7 +164,7 @@ def import_tmc11(context, tmc):
     md = mesh_obj.modifiers.new('', 'ARMATURE')
     md.object = armature_obj
 
-    bm = bmesh.new(use_operators=True)
+    bm = bmesh.new(use_operators=False)
     bm.from_mesh(m)
 
     # We add vertices to the mesh and de-interleave vertex properties to set them later
@@ -180,7 +181,7 @@ def import_tmc11(context, tmc):
             objgeo = tmc.mdlgeo.chunks[ndo.chunks[0].obj_index]
         except IndexError:
             continue
-        wgt = objgeo.metadata.name[:3] == b'MOT'
+        wgt = ndo.metadata.name.startswith(b'MOT')
         gm = Matrix(tmc.glblmtx.chunks[ndo.metadata.node_index])
         for decl_idx, c in enumerate(objgeo.sub_container.chunks):
             blend_weights.extend(c.vertex_count * ((0, 0, 0, 0), ))
@@ -310,14 +311,13 @@ def import_tmc11(context, tmc):
 
 def set_bone_tail(b):
     for c in b.children:
-        bc = c.collections[0]
-        if bc.name == 'MOT':
-            match sum( 1 for cc in c.children if cc.collections[0] == bc ):
+        if c.name.startswith('MOT'):
+            match sum( 1 for cc in c.children if cc.name.startswith('MOT')):
                 case 0:
                     c.tail = c.head + c.parent.matrix.to_3x3() @ Vector((0, .075, 0))
                 case 1:
                     for cc in c.children:
-                        if cc.collections[0] == bc:
+                        if cc.name.startswith('MOT'):
                             c.tail = c.head + .075 * (cc.head - c.head).normalized()
                             break
                 case x:
