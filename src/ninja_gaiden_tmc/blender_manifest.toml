@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "ninja_gaiden_tmc"
-version = "2.0.0"
+version = "2.0.1"
 name = "Ninja Gaiden Sigma 2 TMC Format"
 tagline = "Import Ninja Gaiden Sigma 2 TMC"
 maintainer = "Nozomi Miyamori"

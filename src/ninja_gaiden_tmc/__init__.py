@@ -29,8 +29,13 @@ class SelectTMCLImportTMC(Operator, ImportHelper):
             default="*.tmcl;*.dat",
             options={'SKIP_SAVE', 'HIDDEN'},
     )
+    directory: StringProperty(subtype='DIR_PATH')
 
-    tmc_path: StringProperty()
+    tmc_path: StringProperty(
+            subtype='FILE_PATH',
+            default='',
+            options={'SKIP_SAVE', 'HIDDEN'}
+    )
 
     def execute(self, context):
         if not self.tmc_path:
@@ -52,9 +57,10 @@ class ImportTMCEntry(Operator, ImportHelper):
             default="*.tmc;*.dat",
             options={'SKIP_SAVE', 'HIDDEN'},
     )
+    directory: StringProperty(subtype='DIR_PATH')
 
     def execute(self, context):
-        return bpy.ops.ninja_gaiden_tmc.select_tmcl_import_tmc('INVOKE_DEFAULT', tmc_path=self.filepath)
+        return bpy.ops.ninja_gaiden_tmc.select_tmcl_import_tmc('INVOKE_DEFAULT', tmc_path=self.filepath, directory=self.directory)
 
 def mmap_open(path):
     with open(path, 'rb') as f:
