@@ -52,6 +52,7 @@ class ImportTMCEntry(Operator, ImportHelper):
     '''Load a TMC file (NGS2)'''
     bl_idname = 'ninja_gaiden_tmc.import_tmc_entry'
     bl_label = 'Select TMC'
+    old_dir = ''
 
     filter_glob: StringProperty(
             default="*.tmc;*.dat",
@@ -59,7 +60,12 @@ class ImportTMCEntry(Operator, ImportHelper):
     )
     directory: StringProperty(subtype='DIR_PATH')
 
+    def invoke(self, context, event):
+        self.directory = ImportTMCEntry.old_dir
+        return super().invoke(context, event)
+
     def execute(self, context):
+        ImportTMCEntry.old_dir = self.directory
         return bpy.ops.ninja_gaiden_tmc.select_tmcl_import_tmc('INVOKE_DEFAULT', tmc_path=self.filepath, directory=self.directory)
 
 def mmap_open(path):
