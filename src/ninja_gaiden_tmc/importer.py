@@ -52,7 +52,11 @@ def import_ngs2_tmc(context, tmc):
     a.collections.new('WGT')
     a.collections.new('WPB')
     for b in a.bones:
-        a.collections[b.name[:3]].assign(b)
+        try:
+            a.collections[b.name[:3]].assign(b)
+        except KeyError:
+            # Not categorized bone
+            pass
     for c in a.collections.values():
         if not len(c.bones):
             a.collections.remove(c)
@@ -81,7 +85,7 @@ def import_ngs2_tmc(context, tmc):
 
     for c in tmc.mtrcol.chunks:
         s = f'MtrCol{c.mtrcol_index:02} '
-        mesh_obj[s + 'Overlay'] = c.overlay
+        mesh_obj[s + 'Mix'] = c.mix
         mesh_obj[s + 'Diffuse'] = c.diffuse
         mesh_obj[s + 'Specular'] = c.specular
         mesh_obj[s + 'Emission Power'] = c.diffuse_emission_power
@@ -100,7 +104,7 @@ def import_ngs2_tmc(context, tmc):
                 new_collection.objects.link(mo)
                 for i, c in enumerate(V):
                     s = f'MtrCol{i:02} '
-                    mo[s + 'Overlay'] = c.overlay
+                    mo[s + 'Mix'] = c.mix
                     mo[s + 'Diffuse'] = c.diffuse
                     mo[s + 'Specular'] = c.specular
                     mo[s + 'Emission Power'] = c.diffuse_emission_power
@@ -118,13 +122,12 @@ def import_ngs2_tmc(context, tmc):
                     f.write(tmc.ttdm.sub_container.chunks[c.chunk_index])
                 else:
                     f.write(tmc.ttdm.chunks[c.chunk_index])
-            images.append(x := bpy.data.images.load(t.name))
+            x = bpy.data.images.load(t.name)
+            images.append(x)
             x.pack()
-            x.name = str(mesh_obj.data.name)
+            x.name = mesh_obj.data.name.translate(str.maketrans('.', '_'))
             x.filepath_raw = ''
     os.remove(t.name)
-
-    #import_colors_from_mtrcol(shader_node_groups, tmc.mtrcol.chunks)
 
     # We add material slots for each OBJGEO chunk
     uvnames = [ 'UVMap', 'UVMap.001', 'UVMap.002', 'UVMap.003' ]
@@ -216,42 +219,36 @@ def import_ngs2_tmc(context, tmc):
 
 
             f = m.node_tree.nodes.new('NodeFrame')
-            f.label = 'Overlay'
-            overlay = m.node_tree.nodes.new('ShaderNodeMix')
-            overlay.parent = f
-            overlay.name = 'overlay'
-            overlay.data_type = 'RGBA'
-            overlay.blend_type = 'OVERLAY'
-            m.node_tree.links.new(overlay.outputs['Result'], pbsdf.inputs['Base Color'])
-            m.node_tree.links.new(overlay.outputs['Result'], pbsdf.inputs['Emission Color'])
+            f.label = 'Mix'
+            diffuse_mix = m.node_tree.nodes.new('ShaderNodeMix')
+            diffuse_mix.parent = f
+            diffuse_mix.data_type = 'RGBA'
+            diffuse_mix.blend_type = 'MIX'
+            diffuse_mix.inputs['Factor'].default_value = .125
+            m.node_tree.links.new(diffuse_mix.outputs['Result'], pbsdf.inputs['Base Color'])
+            m.node_tree.links.new(diffuse_mix.outputs['Result'], pbsdf.inputs['Emission Color'])
 
-            overlay_input = m.node_tree.nodes.new('ShaderNodeAttribute')
-            overlay_input.parent = f
-            overlay_input.attribute_type = 'OBJECT'
-            overlay_input.attribute_name = A('Overlay')
-            m.node_tree.links.new(overlay_input.outputs['Color'], overlay.inputs['B'])
+            diffuse_mix_input = m.node_tree.nodes.new('ShaderNodeAttribute')
+            diffuse_mix_input.parent = f
+            diffuse_mix_input.attribute_type = 'OBJECT'
+            diffuse_mix_input.attribute_name = A('Mix')
+            m.node_tree.links.new(diffuse_mix_input.outputs['Color'], diffuse_mix.inputs['B'])
 
             f = m.node_tree.nodes.new('NodeFrame')
             f.label = 'Diffuse'
-            mul = m.node_tree.nodes.new('ShaderNodeVectorMath')
             diffuse_multiply = m.node_tree.nodes.new('ShaderNodeMix')
             diffuse_multiply.parent = f
-            diffuse_multiply.name = 'multiply'
             diffuse_multiply.data_type = 'RGBA'
             diffuse_multiply.blend_type = 'MULTIPLY'
-            diffuse_multiply.inputs['Factor'].default_value = 1
-            m.node_tree.links.new(diffuse_multiply.outputs['Result'], overlay.inputs['A'])
+            diffuse_multiply.inputs[0].default_value = 1
+            m.node_tree.links.new(diffuse_multiply.outputs['Result'], diffuse_mix.inputs['A'])
             m.node_tree.links.new(diffuse_multiply.outputs['Result'], pbsdf.inputs['Specular Tint'])
 
-            mul.parent = f
-            mul.operation = 'SCALE'
-            mul.inputs['Scale'].default_value = 4
             diffuse_multiply_input = m.node_tree.nodes.new('ShaderNodeAttribute')
             diffuse_multiply_input.parent = f
             diffuse_multiply_input.attribute_type = 'OBJECT'
             diffuse_multiply_input.attribute_name = A('Diffuse')
-            m.node_tree.links.new(diffuse_multiply_input.outputs['Color'], mul.inputs['Vector'])
-            m.node_tree.links.new(mul.outputs[0], diffuse_multiply.inputs['B'])
+            m.node_tree.links.new(diffuse_multiply_input.outputs['Color'], diffuse_multiply.inputs['B'])
 
 
             f = m.node_tree.nodes.new('NodeFrame')
@@ -288,12 +285,13 @@ def import_ngs2_tmc(context, tmc):
             m.node_tree.links.new(div.outputs[0], pbsdf.inputs['Specular IOR Level'])
 
 
-            mix = m.node_tree.nodes.new('ShaderNodeMix')
-            mix.data_type = 'RGBA'
-            mix.blend_type = 'ADD'
-            mix.inputs['Factor'].default_value = 0
-            mix.inputs['B'].default_value = 4*(0,)
-            m.node_tree.links.new(mix.outputs['Result'], diffuse_multiply.inputs['A'])
+            texture_mix = m.node_tree.nodes.new('ShaderNodeMix')
+            texture_mix.data_type = 'RGBA'
+            texture_mix.blend_type = 'ADD'
+            texture_mix.inputs['Factor'].default_value = 1
+            texture_mix.inputs['A'].default_value = 4*(0,)
+            texture_mix.inputs['B'].default_value = 4*(1,)
+            m.node_tree.links.new(texture_mix.outputs['Result'], diffuse_multiply.inputs['A'])
 
             uv_idx = 0
             for t in c.texture_info_table:
@@ -322,21 +320,20 @@ def import_ngs2_tmc(context, tmc):
                                 m.node_tree.links.new(ti.outputs['Color'], inv.inputs['Color'])
                             case 3:
                                 ti.label = frame.label = 'Shadow Texture'
-                                mix.parent = frame
+                                texture_mix.parent = frame
                                 mul = m.node_tree.nodes.new('ShaderNodeMath')
                                 mul.operation = 'MULTIPLY'
-                                #m.node_tree.links.new(mul.outputs[0], pbsdf.inputs['Alpha'])
-                                m.node_tree.links.new(mix.outputs['Result'], pbsdf.inputs['Alpha'])
-                                m.node_tree.links.new(mix.outputs['Result'], mul.inputs[0])
-                                m.node_tree.links.new(ti.outputs['Color'], mix.inputs['A'])
+                                m.node_tree.links.new(texture_mix.outputs['Result'], mul.inputs[0])
                                 m.node_tree.links.new(ti.outputs['Alpha'], mul.inputs[1])
+                                m.node_tree.links.new(mul.outputs[0], pbsdf.inputs['Alpha'])
                             case 5:
                                 ti.label = frame.label = 'Diffuse Texture'
-                                mix.parent = frame
+                                texture_mix.inputs['Factor'].default_value = 0
                                 # It always uses first uv.
                                 uv.uv_map = uvnames[0]
-                                if not mix.inputs['A'].is_linked:
-                                    m.node_tree.links.new(ti.outputs['Color'], mix.inputs['A'])
+                                if not texture_mix.inputs['A'].is_linked:
+                                    texture_mix.parent = frame
+                                    m.node_tree.links.new(ti.outputs['Color'], texture_mix.inputs['A'])
                                     m.node_tree.links.new(ti.outputs['Alpha'], pbsdf.inputs['Alpha'])
                     case TextureUsage.Normal:
                         ti.label = frame.label = 'Normal Texture'
@@ -353,20 +350,20 @@ def import_ngs2_tmc(context, tmc):
                         m.node_tree.links.new(ti.outputs['Color'], curv.inputs['Color'])
                     case TextureUsage.Multiply:
                         ti.label = frame.label = 'Multiplicative Texture'
-                        mix.blend_type = 'MULTIPLY'
+                        texture_mix.blend_type = 'MULTIPLY'
                         gam = m.node_tree.nodes.new('ShaderNodeGamma')
                         gam.parent = frame
                         gam.inputs['Gamma'].default_value = 2.2
-                        m.node_tree.links.new(gam.outputs['Color'], mix.inputs['Factor'])
+                        m.node_tree.links.new(gam.outputs['Color'], texture_mix.inputs['Factor'])
                         m.node_tree.links.new(ti.outputs['Color'], gam.inputs['Color'])
-                        m.node_tree.links.new(ti.outputs['Color'], mix.inputs['B'])
+                        m.node_tree.links.new(ti.outputs['Color'], texture_mix.inputs['B'])
                     case TextureUsage.Add:
                         ti.label = frame.label = 'Additive Texture'
                         # It always uses first uv
                         uv.uv_map = uvnames[0]
-                        mix.blend_type = 'ADD'
-                        mix.inputs['Factor'].default_value = 1
-                        m.node_tree.links.new(ti.outputs['Color'], mix.inputs['B'])
+                        texture_mix.blend_type = 'ADD'
+                        m.node_tree.links.new(ti.outputs['Alpha'], texture_mix.inputs['Factor'])
+                        m.node_tree.links.new(ti.outputs['Color'], texture_mix.inputs['B'])
                     case x:
                         raise Exception(f'Not supported texture map usage: {repr(x)}')
 
