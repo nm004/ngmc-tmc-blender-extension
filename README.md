@@ -1,9 +1,9 @@
-Ninja Gaiden Sigam 2 TMC Blender Extension
-==========================================
+Ninja Gaiden Master Collection TMC Importer Blender Extension
+=============================================================
 
 Author: Nozomi Miyamori
 
-A blender extension to import Ninja Gaiden Sigma 2 TMC into
+A blender extension to import Ninja Gaiden Sigma 1 and 2 TMC into
 your blender project.
 
 Requirements
@@ -23,9 +23,7 @@ Installation
 Caveats
 -------
 
-* It does not import material parameters (e.g. color, metalness, roughness) yet
 * It does not support exporting a blender project to an TMC file
-* It may not import some TMC models (I tested the extension only with some human models)
 
 License
 -------

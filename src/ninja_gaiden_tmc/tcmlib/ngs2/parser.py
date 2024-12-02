@@ -1,5 +1,5 @@
-# Ninja Gaiden Sigma 2 TMC Importer by Nozomi Miyamori is under the public domain
-# and also marked with CC0 1.0. This file is a part of Ninja Gaiden Sigma 2 TMC Importer.
+# Ninja Gaiden Model Importer by Nozomi Miyamori is under the public domain
+# and also marked with CC0 1.0. This file is a part of Ninja Gaiden Model Importer.
 
 from __future__ import annotations
 
@@ -14,13 +14,8 @@ class TMCParser(ContainerParser):
     def __init__(self, data, ldata = b''):
         super().__init__(b'TMC', data)
 
-        (
-                _, _, _,
-                _,
-                name
-        ) = struct.unpack_from('< HH4xI4x I4x8x 10s', self._metadata)
-
-        self.metadata = TMCMetaData(name.partition(b'\0')[0])
+        a = struct.unpack_from('< HH4xI4x I4x8x 16s', self._metadata)
+        self.metadata = TMCMetaData(*a[:-1], a[-1].partition(b'\0')[0])
 
         o = 0xc0
         p = o+4*len(self._chunks)
@@ -31,51 +26,61 @@ class TMCParser(ContainerParser):
         for t, c in zip(tbl, self._chunks):
             match t:
                 case 0x8000_0001:
-                    self.mdlgeo = c and MdlGeoParser(c, getattr(self.lheader, 'mdlgeo', b''))
+                    self.mdlgeo = MdlGeoParser(c)
                 case 0x8000_0002:
-                    self.ttdm = c and TTDMParser(c, getattr(self.lheader, 'ttdl', b''))
+                    self.ttdm = TTDMParser(c, ldata and self.lheader.ttdl)
                 case 0x8000_0003:
-                    self.vtxlay = c and VtxLayParser(c, getattr(self.lheader, 'vtxlay', b''))
+                    self.vtxlay = VtxLayParser(c, ldata and self.lheader.vtxlay)
                 case 0x8000_0004:
-                    self.idxlay = c and IdxLayParser(c, getattr(self.lheader, 'idxlay', b''))
+                    self.idxlay = IdxLayParser(c, ldata and self.lheader.idxlay)
                 case 0x8000_0005:
-                    self.mtrcol = c and MtrColParser(c, getattr(self.lheader, 'mtrcol', b''))
+                    self.mtrcol = MtrColParser(c)
                 case 0x8000_0006:
-                    self.mdlinfo = c and MdlInfoParser(c, getattr(self.lheader, 'mdlinfo', b''))
+                    self.mdlinfo = MdlInfoParser(c)
                 case 0x8000_0010:
-                    self.hielay = c and HieLayParser(c, getattr(self.lheader, 'hielay', b''))
+                    self.hielay = HieLayParser(c)
                 case 0x8000_0030:
-                    self.nodelay = c and NodeLayParser(c, getattr(self.lheader, 'nodelay', b''))
+                    self.nodelay = NodeLayParser(c)
                 case 0x8000_0040:
-                    self.glblmtx = c and GlblMtxParser(c, getattr(self.lheader, 'glblmtx', b''))
+                    self.glblmtx = GlblMtxParser(c)
                 case 0x8000_0050:
-                    self.bnofsmtx = c and BnOfsMtxParser(c, getattr(self.lheader, 'bnofsmtx', b''))
+                    self.bnofsmtx = BnOfsMtxParser(c)
                 case 0x8000_0060:
-                    self.cpf = c
+                    #self.cpf = c
+                    pass
                 case 0x8000_0070:
-                    self.mcapack = c
+                    #self.mcapack = c
+                    pass
                 case 0x8000_0080:
-                    self.renpack = c
+                    #self.renpack = c
+                    pass
+
+        n = self.metadata.general_chunk_count
+
+        self.obj_type_info = OBJ_TYPE_INFOParser(self.chunks[n], self.chunks[n+1])
+        if x := self.chunks[n+5]:
+            self.mtrlchng = MTRLCHNGParser(x)
 
     def close(self):
         super().close()
         self.lheader.close()
-        (x := getattr(self, 'mdlgeo', None)) and x.close()
-        (x := getattr(self, 'ttdm', None)) and x.close()
-        (x := getattr(self, 'vtxlay', None)) and x.close()
-        (x := getattr(self, 'idxlay', None)) and x.close()
-        (x := getattr(self, 'mtrcol', None)) and x.close()
-        (x := getattr(self, 'mdlinfo', None)) and x.close()
-        (x := getattr(self, 'hielay', None)) and x.close()
-        (x := getattr(self, 'nodelay', None)) and x.close()
-        (x := getattr(self, 'glblmtx', None)) and x.close()
-        (x := getattr(self, 'bnofsmtx', None)) and x.close()
+        self.mdlgeo.close()
+        self.ttdm.close()
+        self.vtxlay.close()
+        self.idxlay.close()
+        self.mtrcol.close()
+        self.mdlinfo.close()
+        self.hielay.close()
+        self.nodelay.close()
+        self.glblmtx.close()
+        self.bnofsmtx.close()
+        if x := getattr(self, 'mtrlchng', b''): x.close()
 
 class TMCMetaData(NamedTuple):
-    #unknown0x0: int
-    #unknown0x2: int
-    #unknown0x8: int
-    #general_chunks_count: int
+    unknown0x0: int
+    unknown0x2: int
+    unknown0x8: int
+    general_chunk_count: int
     #addr0x18
     name: bytes
 
@@ -92,45 +97,48 @@ class MdlGeoParser(ContainerParser):
 class ObjGeoParser(ContainerParser):
     def __init__(self, data):
         super().__init__(b'ObjGeo', data)
-        a = struct.unpack_from('< HHi8x 8x8x 10s', self._metadata)
+        a = struct.unpack_from('< HHiII 8x8x 16s', self._metadata)
         self.metadata = ObjGeoMetaData(*a[:-1], a[-1].partition(b'\0')[0])
         self.sub_container = GeoDeclParser(self._sub_container)
-        self.chunks = tuple(ObjGeoParser._gen_chunks(self._chunks))
+        self.chunks = tuple( ObjGeoParser._make_chunk(c) for c in self._chunks )
 
     @staticmethod
-    def _gen_chunks(chunks):
-        for c in chunks:
-            a = struct.unpack_from(f'< ii4xI', c)
-            assert a[2] <= 4
-            b = struct.unpack_from('< II8x III4x IIII II8x 8xII I?3xII IIII'
-                                   'IIII ffff IIII IIII IIII', c, 0x20)
-            I = ( c[o:o+0x7c] for o in struct.unpack_from(f'< {a[2]}I', c, 0x10) )
-            yield ObjGeoChunk(*a[:-1], *b, tuple(ObjGeoParser._gen_texture_info(I)))
+    def _make_chunk(c):
+        a = struct.unpack_from(f'< iiII', c)
+        texture_count = a[3]
+        assert texture_count <= 4
+        b = struct.unpack_from('< II8x III4x IIII II8x 8xII I?3xII IIII'
+                                'IIII ffff IIII IIII IIII', c, 0x20)
+        I = ( c[o:] for o in struct.unpack_from(f'< {texture_count}I', c, 0x10) )
+        return ObjGeoChunk(*a[:-1], *b, tuple( ObjGeoParser._make_texture_info(i) for i in I ))
 
     @staticmethod
-    def _gen_texture_info(data):
-        for d in data:
-            x = struct.unpack_from('< III4x IIII IIII IIII IIII IIII ffII III', d)
-            yield TextureInfo(x[0], TextureUsage(x[1]), *x[2:])
+    def _make_texture_info(i):
+        x = struct.unpack_from('< IIII IIII IIii I', i)
+        return TextureInfo(x[0], TextureUsage(x[1]), *x[2:],
+                           *struct.unpack_from('IIII IIII IIII ffff I', i, 0x38-4*bool(x[-1])))
 
     def close(self):
         super().close()
         self.sub_container.close()
 
 class ObjGeoMetaData(NamedTuple):
-    unknown0x0: int # 3
-    unknown0x2: int # 1
+    unknown0x0: int # == 3
+    unknown0x2: int # == 1
     obj_index: int
-    #padding
+    unknown0x8: int # padding?
+    unknown1xc: int # padding?
     #objinfo_address0x10
     #address0x18
     name: bytes
     
 class ObjGeoChunk(NamedTuple):
     objgeo_chunk_index: int
-    mtrcol_index: int
-    #padding
+    mtrcol_chunk_index: int
+    unknown0x8: int # padding?
     #texture_count: int
+
+    #texture_info_offset_table: tuple
 
     unknown0x20: int
     unknown0x24: int
@@ -151,10 +159,10 @@ class ObjGeoChunk(NamedTuple):
     #objinfo_chunk_address0x58
 
     #address0x60
-    unknown0x68: int # 1
-    unknown0x6c: int # 5
+    unknown0x68: int # == 1
+    unknown0x6c: int # == 5
 
-    unknown0x70: int # 1
+    unknown0x70: int # == 1
     show_backface: bool
     first_index_index: int
     index_count: int
@@ -169,15 +177,15 @@ class ObjGeoChunk(NamedTuple):
     unknown0x98: int
     unknown0x9c: int
 
-    unknown0xa0: float # 1.0
-    unknown0xa4: float # 0.0
-    unknown0xa8: float # 1.0
-    unknown0xac: float # 1.0
+    unknown0xa0: float # == 1.0
+    unknown0xa4: float # == 0.0
+    unknown0xa8: float # == 1.0
+    unknown0xac: float # == 1.0
 
     unknown0xb0: int
     unknown0xb4: int
-    unknown0xb8: int # 1
-    unknown0xbc: int # 1
+    unknown0xb8: int # == 1
+    unknown0xbc: int # == 1
 
     unknown0xc0: int
     unknown0xc4: int
@@ -194,9 +202,10 @@ class TextureInfo(NamedTuple):
     info_index: int
     usage: TextureUsage
     texture_index: int
-    #padding
+    unknown0xc: int # padding?
+
     color_usage: int
-    unknown0x14: int
+    unknown0x14: int # == 1
     unknown0x18: int
     unknown0x1c: int
 
@@ -206,77 +215,79 @@ class TextureInfo(NamedTuple):
     unknown0x2c: int
 
     unknown0x30: int
-    unknown0x34: int
-    unknown0x38: int
-    unknown0x3c: int
 
-    unknown0x40: int
-    unknown0x44: int
-    unknown0x48: int
-    unknown0x4c: int # 1
+    unknown0x0_1: int
+    unknown0x4_1: int
+    unknown0x8_1: int
+    unknown0xc_1: int
 
-    unknown0x50: int # 1
-    unknown0x54: int # 1
-    unknown0x58: int
-    unknown0x5c: int
+    unknown0x10_1: int
+    unknown0x14_1: int # == 1
+    unknown0x18_1: int # == 1
+    unknown0x1c_1: int # == 1
 
-    unknown0x60: float # 12.0
-    unknown0x64: float # -1.0
-    unknown0x68: int
-    unknown0x6c: int
+    unknown0x20_1: float
+    unknown0x24_1: float
+    unknown0x28_1: float # == 12.0
+    unknown0x2c_1: float # == -1.0
 
-    unknown0x70: int
-    unknown0x74: int
-    unknown0x78: int # 2
+    unknown0x30_1: int
+    unknown0x34_1: int
+    unknown0x38_1: int
+    unknown0x3c_1: int
+
+    unknown0x40_1: int # == 2
 
 class TextureUsage(IntEnum):
     Albedo = 0
     Normal = 1
-    Multiply = 2
+    Smoothness = 2
     Add = 3
 
 class GeoDeclParser(ContainerParser):
     def __init__(self, data):
         super().__init__(b'GeoDecl', data)
-        self.chunks = tuple(GeoDeclParser._gen_chunks(self._chunks))
+        self.chunks = tuple( GeoDeclParser._make_chunk(c) for c in self._chunks )
 
     @staticmethod
-    def _gen_chunks(chunks):
-        for c in chunks:
-            a = struct.unpack_from('< IIII III', c)
-            b = struct.unpack_from('< III', c, a[1])
-            o = a[1] + 0x18
-            E = ( c[i:i+8] for i in range(o, 8*b[2]+o, 8) )
-            yield GeoDeclChunk(a[0], *a[2:], *b[0:2],
-                               tuple(GeoDeclParser._gen_d3dvertexelement9(E)))
+    def _make_chunk(c):
+        a = struct.unpack_from('< IIII IIII', c)
+        vertex_info_offset = a[1]
+        b = struct.unpack_from('< II III', c, vertex_info_offset)
+        vertex_element_count = b[2]
+        o = vertex_info_offset + 0x18
+        E = ( c[o:] for o in range(o, 8*vertex_element_count+o, 8) )
+        return GeoDeclChunk(a[0], *a[2:], *b[0:2], *b[3:],
+                            tuple( GeoDeclParser._make_d3dvertexelement9(e) for e in E ))
 
     @staticmethod
-    def _gen_d3dvertexelement9(data):
-        for d in data:
-            (stream, offset, d3d_decl_type,
-             method, usage, usage_index) = struct.unpack('< hhBBBB', d)
-            yield D3DVERTEXELEMENT9(stream, offset, D3DDECLTYPE(d3d_decl_type),
-                                    method, D3DDECLUSAGE(usage), usage_index)
+    def _make_d3dvertexelement9(e):
+        a = struct.unpack_from('< hhBBBB', e)
+        return D3DVERTEXELEMENT9(*a[:2], D3DDECLTYPE(a[2]), a[3], D3DDECLUSAGE(a[4]), a[5])
 
 class GeoDeclChunk(NamedTuple):
-    unknown0x0: int # 0
-    #vertex_info_offset
-    unknown0x8: int # 1
+    unknown0x0: int # == 0
+    #vertex_info_offset0x4 # == 0x38
+    unknown0x8: int # == 1
     index_buffer_index: int
 
     index_count: int
     vertex_count: int
-    unknown0x18: int # 0, 1, 2, 3, 4
-    #padding
+    unknown0x18: int # == 0, 1, 2, 3 or 4
+    unknown0x1c: int # padding?
 
     #address0x20
     #address0x28
     #vtxlay_chunk_address0x30
-    vertex_buffer_index: int
-    vertex_size: int
 
-    #vertex_elements_count
-    #padding
+    # skip to [vertex_info_offset]
+
+    vertex_buffer_index: int
+    vertex_nbytes: int
+
+    #vertex_element_count0x8
+    vertex_info_unknown0xc: int # padding?
+    vertex_info_unknown0x10: int # padding?
     #address0x48
     vertex_elements: tuple[D3DVERTEXELEMENT9]
 
@@ -338,12 +349,7 @@ class TTDMParser(ContainerParser):
 class TTDHParser(ContainerParser):
     def __init__(self, data):
         super().__init__(b'TTDH', data)
-        self.chunks = tuple(TTDHParser._gen_chunks(self._chunks))
-
-    @staticmethod
-    def _gen_chunks(chunks):
-        for c in chunks:
-            yield TTDHChunk(*struct.unpack_from('< ?3xi', c))
+        self.chunks = tuple( TTDHChunk(*struct.unpack_from('< ?3xi', c)) for c in self._chunks )
 
 class TTDHChunk(NamedTuple):
     # If in_ttdl is true, the index points to TTDL, otherwise it points to TTDM.
@@ -368,41 +374,40 @@ class IdxLayParser(ContainerParser):
 class MtrColParser(ContainerParser):
     def __init__(self, data, ldata = b''):
         super().__init__(b'MtrCol', data)
-        self.chunks = tuple(MtrColParser._gen_chunks(self._chunks))
+        self.chunks = tuple( MtrColParser._make_chunk(c) for c in self._chunks )
 
     @staticmethod
-    def _gen_chunks(chunks):
-        for c in chunks:
-            mtrcol_index, xrefs_count = struct.unpack_from('< iI', c, 0xd0)
-            xrefs = struct.unpack_from(f'<' + xrefs_count*'iI', c, 0xd8)
-            xrefs = tuple(xrefs[i:i+2] for i in range(0, len(xrefs), 2))
-            yield MtrColChunk(
-                    struct.unpack_from('< 4f', c),
-                    struct.unpack_from('< 4f', c, 0x10),
-                    struct.unpack_from('< 4f', c, 0x20),
-                    *struct.unpack_from('< ff', c, 0x68),
-                    struct.unpack_from('< 4f', c, 0x80),
-                    struct.unpack_from('< 4f', c, 0x90),
-                    mtrcol_index, xrefs)
+    def _make_chunk(c):
+        mtrcol_index, xref_count = struct.unpack_from('< iI', c, 0xd0)
+        xrefs = struct.unpack_from(f'<' + xref_count*'iI', c, 0xd8)
+        xrefs = tuple(xrefs[i:i+2] for i in range(0, len(xrefs), 2))
+        return MtrColChunk(
+                struct.unpack_from('< 4f', c),
+                struct.unpack_from('< 4f', c, 0x10),
+                struct.unpack_from('< 4f', c, 0x20),
+                *struct.unpack_from('< ff', c, 0x68),
+                struct.unpack_from('< 4f', c, 0x80),
+                struct.unpack_from('< 4f', c, 0x90),
+                mtrcol_index, xrefs)
 
 class MtrColChunk(NamedTuple):
-    mix: tuple[float]
-    diffuse: tuple[float]
+    emission: tuple[float]
     specular: tuple[float]
+    specular_power: tuple[float]
     # unknown0x30: tuple[float]
     # unknown0x40: tuple[float]
     # unknown0x50: tuple[float]
     # address0x60
     # unknown0x70: tuple[float]
-    specular_emission_power: float
-    diffuse_emission_power: float
+    specular_glow_power: float
+    diffuse_glow_power: float
 
     coat: tuple[float]
     sheen: tuple[float]
     # unknown0xa0: tuple[float]
     # unknown0xb0: tuple[float]
     # unknown0xc0: tuple[float]
-    mtrcol_index: int
+    mtrcol_chunk_index: int
     # Each tuple has (objindex, count)
     # that means the mtrcol is used by "objindex" "count" times
     xrefs: tuple[tuple[int, int]]
@@ -420,32 +425,68 @@ class MdlInfoParser(ContainerParser):
 class ObjInfoParser(ContainerParser):
     def __init__(self, data):
         super().__init__(b'ObjInfo', data)
-        _, obj_index, _ = struct.unpack_from('< Ii4xI', self._metadata)
-        self.metadata = ObjInfoMetaData(obj_index)
+        self.metadata = ObjInfoMetaData(
+                *struct.unpack_from('< HHIII IIII IIII IIII IIII IIII ffff', self._metadata),
+                ()
+        )
+        self.chunks = ()
 
 class ObjInfoMetaData(NamedTuple):
-    #unknown0x0: int # 3
-    #unknown0x2: int # 2
+    unknown0x0: int # == 3
+    unknown0x2: int # == 2
     obj_index: int
-    #unknown0xc: int
-    #unknown0x14: int
+    unknown0x8: int
+    weighted_node_count: int
+
+    unknown0x10: int
+    unknown0x14: int # == 2
+    unknown0x18: int
+    unknown0x1c: int
+
+    unknown0x20: int
+    unknown0x24: int
+    unknown0x28: int
+    unknown0x2c: int
+
+    unknown0x30: int
+    unknown0x34: int
+    unknown0x38: int # == 1
+    unknown0x3c: int # == 1
+
+    unknown0x40: int # == 1
+    unknown0x44: int
+    unknown0x48: int
+    unknown0x4c: int
+
+    unknown0x50: int # == 1
+    unknown0x54: int
+    unknown0x58: int
+    unknown0x5c: int
+
+    unknown0x60: float
+    unknown0x64: float
+    unknown0x68: float
+    unknown0x6c: float # == 1.0
+
+    chunk: ObjInfoChunk
+
+class ObjInfoChunk(NamedTuple):
+    pass
 
 class HieLayParser(ContainerParser):
     def __init__(self, data, ldata = b''):
         super().__init__(b'HieLay', data)
-        self.chunks = tuple(HieLayParser._gen_chunks(self._chunks))
+        self.chunks = tuple( HieLayParser._make_chunk(c) for c in self._chunks )
 
     @staticmethod
-    def _gen_chunks(chunks):
-        for c in chunks:
-            *matrix, parent, children_count, level = struct.unpack_from('< 16f iII', c)
-            children = struct.unpack_from(f'< {children_count}i', c, 0x50)
-            yield HieLayChunk(matrix, parent, level, children)
+    def _make_chunk(c):
+        *matrix, parent, child_count, level = struct.unpack_from('< 16f iII', c)
+        children = struct.unpack_from(f'< {child_count}i', c, 0x50)
+        return HieLayChunk(matrix, parent, level, children)
 
 class HieLaySubContainer(NamedTuple):
-    #unknown0x0: int # 1
-    #unknown0x10: int # 2
-    pass
+    unknown0x0: int # == 1
+    unknown0x10: int # == 2
 
 class HieLayChunk(NamedTuple):
     matrix: tuple[float]
@@ -500,18 +541,15 @@ class NodeLayParser(ContainerParser):
             c.close()
 
 class NodeLayMetaData(NamedTuple):
-    #unknown0x0: int # 1
-    #unknown0x2: int # 2
-    pass
+    unknown0x0: int # == 1
+    unknown0x2: int # == 2
 
 class NodeObjParser(ContainerParser):
     def __init__(self, data):
         super().__init__(b'NodeObj', data)
-        (
-                master, node_index,
-                name
-        ) = struct.unpack_from(f'< 4xii4x {self._metadata.nbytes-0x10}s', self._metadata)
-        self.metadata = NodeObjMetaData(master, node_index, name.partition(b'\0')[0])
+        n = self._metadata.nbytes - 0x10
+        x = struct.unpack_from(f'< Iii4x {n}s', self._metadata)
+        self.metadata = NodeObjMetaData(*x[:-1], x[-1].partition(b'\0')[0])
         if self._chunks:
             c = self._chunks[0]
             obj_index, node_count, node_index, *matrix = struct.unpack_from('< iIi4x 16f', c)
@@ -519,7 +557,7 @@ class NodeObjParser(ContainerParser):
             self.chunks = (NodeObjChunk(obj_index, node_index, matrix, node_group),)
 
 class NodeObjMetaData(NamedTuple):
-    #unknown0x0: int
+    unknown0x0: int
     master: int
     node_index: int
     name: bytes
@@ -541,6 +579,24 @@ class BnOfsMtxParser(ContainerParser):
         self.chunks = tuple( struct.unpack_from('< 16f', c) for c in self._chunks )
 
 # NGS2 specific data parsers below
+
+class OBJ_TYPE_INFOParser:
+    def __init__(self, table_info, table):
+        X = struct.unpack_from('HH HH HH HH HH HH HH HH', table_info)
+        X = [ (X[i], X[i+1]) for i in range(0, len(X), 2) ]
+        X.sort(key=lambda x: x[0])
+        n = sum( x[1] for x in X )
+        O = struct.unpack_from(f'< {n}I', table)
+        f = lambda x: (OBJ_TYPE(x[0]), *x[1:])
+        self.table = tuple( f(struct.unpack_from('< III', table, o)) for p, n in X for o in O[p:p+n] )
+
+class OBJ_TYPE(IntEnum):
+    NML = 0
+    MOT = 1
+    WGT = 3
+    SUP = 4
+    OPT = 5
+    WPB = 7
 
 class MTRLCHNGParser(ContainerParser):
     def __init__(self, data, ldata = b''):
@@ -572,16 +628,16 @@ class MTRLCHNGMetaData(NamedTuple):
 
 # Same as MtrColChunk but w/o mtrcol_index and xrefs
 class MTRLCHNGElement(NamedTuple):
-    mix: tuple[float]
-    diffuse: tuple[float]
+    emission: tuple[float]
     specular: tuple[float]
+    specular_power: tuple[float]
     # unknown0x30: tuple[float]
     # unknown0x40: tuple[float]
     # unknown0x50: tuple[float]
     # address0x60
     # unknown0x70: tuple[float]
-    specular_emission_power: float
-    diffuse_emission_power: float
+    specular_glow_power: float
+    diffuse_glow_power: float
 
     coat: tuple[float]
     sheen: tuple[float]

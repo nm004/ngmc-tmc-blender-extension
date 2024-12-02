@@ -1,4 +1,4 @@
-# Ninja Gaiden Sigma 2 TMC Importer by Nozomi Miyamori is under the public domain
+# Ninja Gaiden Model Importer for Blender by Nozomi Miyamori is under the public domain
 # and also marked with CC0 1.0. This file is a part of Ninja Gaiden Sigma 2 TMC Importer.
 
 import warnings
@@ -10,18 +10,22 @@ class ContainerParser:
         ldata = memoryview(ldata).toreadonly()
 
         if data[:8] != magic.ljust(8, b'\0'):
-            raise ParserError(f'No magic bytes "{magic}" found')
+            data.release()
+            ldata.release()
+            raise ParserError(f'No magic bytes "{magic.decode()}" found')
 
         (
-                endian, _, _, header_nbytes,
+                endian, major_ver, minor_ver, header_nbytes,
                 container_nbytes, chunk_count, valid_chunk_count,
                 offset_table_pos, size_table_pos, sub_container_pos,
-        ) = struct.unpack_from('< cxccI III4x III', data, 8)
+        ) = struct.unpack_from('< bxbbI III4x III', data, 8)
+
+        self._endian, self._major_ver, self._minor_ver = endian, major_ver, minor_ver
 
         self._data = data = data[:container_nbytes]
 
         lcontainer_nbytes = 0
-        if header_nbytes == 0x50:
+        if (major_ver, minor_ver) == (1, 1) and header_nbytes == 0x50:
             if not ldata:
                 warnings.warn(f'No ldata was passed to {magic.decode()}')
             else:
@@ -47,12 +51,12 @@ class ContainerParser:
         p = ( offset_table and offset_table[0] or container_nbytes )*(o > 0)
         self.sub_container = self._sub_container = data[o:p]
 
-        self.chunks = self._chunks = tuple(ContainerParser._gen_chunks(
+        self.chunks = self._chunks = tuple(ContainerParser._generate_chunks(
             ldata or data, offset_table, size_table
         ))
 
     @staticmethod
-    def _gen_chunks(data, offset_table, size_table):
+    def _generate_chunks(data, offset_table, size_table):
         if size_table:
             yield from ( data[o:o+n] for o, n in zip(offset_table, size_table) )
             return

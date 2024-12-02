@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "ninja_gaiden_tmc"
-version = "2.1.0"
-name = "Ninja Gaiden Sigma 2 TMC Format"
-tagline = "Import Ninja Gaiden Sigma 2 TMC"
+version = "3.0.0"
+name = "Ninja Gaiden Sigma 1 and 2 TMC Format"
+tagline = "Import Ninja Gaiden Sigma 1 and 2 TMC"
 maintainer = "Nozomi Miyamori"
 type = "add-on"
 
