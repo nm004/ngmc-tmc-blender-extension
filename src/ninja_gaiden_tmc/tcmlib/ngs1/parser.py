@@ -27,6 +27,9 @@ class TMCParser(ContainerParser):
         tbl = self._metadata[o:p].cast('I')
 
         for t, c in zip(tbl, self._chunks):
+            if not c:
+                continue
+
             match t:
                 case 0x8000_0001:
                     self.mdlgeo = MdlGeoParser(c)
@@ -39,20 +42,20 @@ class TMCParser(ContainerParser):
                     self.mdlinfo = MdlInfoParser(c)
                 case 0x8000_0010:
                     self.hielay = HieLayParser(c)
-                case 0x0000_0000:
-                    #self.collide = COLLIDEParser(c)
-                    pass
                 case 0x0000_0001:
                     self.obj_type_info = OBJ_TYPE_INFOParser(c)
+                case 0x0000_0015:
+                    self.extmcol = EXTMCOLParser(c)
 
     def close(self):
         super().close()
-        (x := getattr(self, 'vtxlay', None)) and x.close()
-        (x := getattr(self, 'idxlay', None)) and x.close()
+        if x := getattr(self, 'vtxlay', None): x.close()
+        if x := getattr(self, 'idxlay', None): x.close()
         self.mdlgeo.close()
         self.mtrcol.close()
         self.mdlinfo.close()
         self.hielay.close()
+        if x := getattr(self, 'extmcol', None): x.close()
 
 class TMCMetaData(NamedTuple):
     unknown0x0: int
@@ -293,22 +296,25 @@ class MtrColParser(ContainerParser):
 
     @staticmethod
     def _make_chunk(c):
-        mtrcol_chunk_index, xref_count = struct.unpack_from('< iI', c, 0x50)
+        xref_count, = struct.unpack_from('< I', c, 0x54)
         xrefs = struct.unpack_from(f'<' + xref_count*'iI', c, 0x58)
-        xrefs = tuple(xrefs[i:i+2] for i in range(0, len(xrefs), 2))
         return MtrColChunk(
                 struct.unpack_from('< 4f', c),
                 struct.unpack_from('< 4f', c, 0x10),
-                struct.unpack_from('< 4f', c, 0x20),
-                struct.unpack_from('< 4f', c, 0x30),
-                *struct.unpack_from('< 4f', c, 0x40),
-                mtrcol_chunk_index, xrefs)
+                (*struct.unpack_from('< 3f', c, 0x20), *struct.unpack_from('< f', c, 0x40)),
+                struct.unpack_from('< 3f', c, 0x30),
+                *struct.unpack_from('< 4f i', c, 0x40),
+                tuple(xrefs[i:i+2] for i in range(0, len(xrefs), 2))
+        )
 
+# Cf. EXTMCOL
 class MtrColChunk(NamedTuple):
     emission: tuple[float]
     specular: tuple[float]
     specular_power: tuple[float]
     unknown0x30: tuple[float]
+    # 0x40-0x44 is ior in MtrCol, 0x2c-0x30 is ior in EXTMCOL,
+    # but the game move ior in MtrCol to 0x2c-0x30 after loading the data.
     ior: float
     specular_glow_power: float
     diffuse_glow_power: float
@@ -395,6 +401,8 @@ class HieLayChunk(NamedTuple):
     #address0x8?
     children: tuple[int]
 
+# NGS1 specific data below.
+
 class OBJ_TYPE_INFOParser:
     def __init__(self, data):
         (
@@ -410,3 +418,25 @@ class OBJ_TYPE(IntEnum):
     SUP = 4
     OPT = 5
     WPB = 7
+
+class EXTMCOLParser(ContainerParser):
+    def __init__(self, data):
+        super().__init__(b'EXTMCOL', data)
+        self.metadata = EXTMCOLMetaData(*struct.unpack_from('< II', self._metadata))
+        m = self.metadata.variant_count
+        n = self.metadata.element_count
+        self.chunks = tuple(
+                MtrColChunk(
+                        struct.unpack_from('< 4f', c),
+                        struct.unpack_from('< 4f', c, 0x10),
+                        struct.unpack_from('< 4f', c, 0x20),
+                        struct.unpack_from('< 4f', c, 0x30),
+                        *struct.unpack_from('< 4f i', c, 0x40),
+                        tuple()
+                ) for c in self._chunks
+        )
+        self.color_variants = tuple( self.chunks[i*n:(i+1)*n] for i in range(m) )
+
+class EXTMCOLMetaData(NamedTuple):
+    variant_count: int
+    element_count: int

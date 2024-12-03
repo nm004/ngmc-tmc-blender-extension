@@ -235,12 +235,20 @@ def import_tmc(context, tmc, g1tg):
             pbsdf.distribution = 'GGX'
             pbsdf.inputs['Specular IOR Level'].default_value = 1
 
+            base_spec_mix = m.node_tree.nodes.new('ShaderNodeMix')
+            base_spec_mix.name = 'mtrcol_base_spec'
+            base_spec_mix.parent = shader_frame
+            base_spec_mix.data_type = 'RGBA'
+            base_spec_mix.blend_type = 'MULTIPLY'
+            base_spec_mix.inputs[0].default_value = .9
+            m.node_tree.links.new(base_spec_mix.outputs['Result'], pbsdf.inputs['Base Color'])
+
             base_color_mix = m.node_tree.nodes.new('ShaderNodeMix')
             base_color_mix.name = 'mtrcol_base_color'
             base_color_mix.parent = shader_frame
             base_color_mix.data_type = 'RGBA'
-            base_color_mix.blend_type = 'LIGHTEN'
-            m.node_tree.links.new(base_color_mix.outputs['Result'], pbsdf.inputs['Base Color'])
+            base_color_mix.blend_type = 'LINEAR_LIGHT'
+            m.node_tree.links.new(base_color_mix.outputs['Result'], base_spec_mix.inputs['A'])
 
             spec_mix = m.node_tree.nodes.new('ShaderNodeMix')
             spec_mix.name = 'mtrcol_specular'
@@ -296,8 +304,8 @@ def import_tmc(context, tmc, g1tg):
                                 base_color_albedo_uv = uv.uv_map
 
                         if t.color_usage == 0:
-                            ti.label = frame.label = 'Diffuse Texture (Soft Light)'
-                            albedo_mix.blend_type = 'SOFT_LIGHT'
+                            ti.label = frame.label = 'Diffuse Texture (Light)'
+                            albedo_mix.blend_type = 'LINEAR_LIGHT'
                         elif t.color_usage == 1:
                             ti.label = frame.label = 'Diffuse Texture (Screen)'
                             albedo_mix.blend_type = 'SCREEN'
@@ -339,14 +347,16 @@ def import_tmc(context, tmc, g1tg):
                         mix.parent = textures_frame
                         mix.data_type = 'RGBA'
                         mix.blend_type = 'ADD'
-                        mix.inputs['Factor'].default_value = 1
+                        mix.inputs['Factor'].default_value = 0
+                        m.node_tree.links.new(ti.outputs['Color'], mix.inputs['Factor'])
                         if is_shadow:
-                            m.node_tree.links.new(base_color_albedo.outputs['Alpha'], mix.inputs['A'])
                             mul = m.node_tree.nodes.new('ShaderNodeMath')
                             mul.operation = 'MULTIPLY'
                             m.node_tree.links.new(ti.outputs['Color'], mul.inputs[0])
                             m.node_tree.links.new(ti.outputs['Alpha'], mul.inputs[1])
                             m.node_tree.links.new(mul.outputs[0], pbsdf.inputs['Alpha'])
+                            m.node_tree.links.new(base_color_albedo.outputs['Alpha'], mix.inputs['A'])
+                            m.node_tree.links.new(base_color_albedo.outputs['Color'], mix.inputs['Factor'])
                         else:
                             m.node_tree.links.new(base_color_albedo.outputs['Color'], mix.inputs['A'])
                         m.node_tree.links.new(ti.outputs['Color'], mix.inputs['B'])
@@ -355,10 +365,36 @@ def import_tmc(context, tmc, g1tg):
                     case x:
                         raise Exception(f'Not supported texture map usage: {repr(x)}')
 
+    try:
+        V = tmc.extmcol.color_variants
+    except AttributeError:
+        pass
+    else:
+        for var in V:
+            C = bpy.data.collections.new(tmc_name)
+            collection_top.children.link(C)
+            M = { m: m for m in objgeo_params_to_material.values() }
+            for c in var:
+                i = c.mtrcol_chunk_index
+                for m in M:
+                    if m['mtrcol'] == i:
+                        M[m] = new_m = m.copy()
+                        set_material_parameters(new_m, c)
+            for i, mo in enumerate(mesh_objs):
+                o = mo.copy()
+                C.objects.link(o)
+                o.parent = armature_obj
+                for j, ms in enumerate(o.material_slots):
+                    ms.material = M[ms.material]
+
+
 def set_material_parameters(material, mtrcol_chunk):
     n = material.node_tree.nodes['Principled BSDF']
     n.inputs['Metallic'].default_value = min(math.log10(1+Vector(mtrcol_chunk.specular_power[:3]).length), 1)
-    n.inputs['IOR'].default_value = max(min(math.log10(1+mtrcol_chunk.ior), 4), 1)
+    n.inputs['IOR'].default_value = max(min(math.log10(1+mtrcol_chunk.specular_power[3]), 4), 1)
+
+    n = material.node_tree.nodes['mtrcol_base_spec']
+    n.inputs['B'].default_value = mtrcol_chunk.specular
 
     n = material.node_tree.nodes['mtrcol_base_color']
     n.inputs['B'].default_value = mtrcol_chunk.emission
