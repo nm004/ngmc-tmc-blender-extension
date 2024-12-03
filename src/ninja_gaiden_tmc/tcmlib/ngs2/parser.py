@@ -24,6 +24,9 @@ class TMCParser(ContainerParser):
         self.lheader = LHeaderParser(self._chunks[i], ldata)
 
         for t, c in zip(tbl, self._chunks):
+            if not c:
+                continue
+
             match t:
                 case 0x8000_0001:
                     self.mdlgeo = MdlGeoParser(c)
@@ -45,21 +48,17 @@ class TMCParser(ContainerParser):
                     self.glblmtx = GlblMtxParser(c)
                 case 0x8000_0050:
                     self.bnofsmtx = BnOfsMtxParser(c)
-                case 0x8000_0060:
-                    #self.cpf = c
-                    pass
-                case 0x8000_0070:
-                    #self.mcapack = c
-                    pass
-                case 0x8000_0080:
-                    #self.renpack = c
-                    pass
+                case 0x0000_0000:
+                    obj_type_info_head = c
+                case 0x0000_0001:
+                    obj_type_info = c
+                case 0x0000_0005:
+                    self.mtrlchng = MTRLCHNGParser(c)
 
-        n = self.metadata.general_chunk_count
-
-        self.obj_type_info = OBJ_TYPE_INFOParser(self.chunks[n], self.chunks[n+1])
-        if x := self.chunks[n+5]:
-            self.mtrlchng = MTRLCHNGParser(x)
+        try:
+            self.obj_type_info = OBJ_TYPE_INFOParser(obj_type_info_head, obj_type_info)
+        except NameError:
+            pass
 
     def close(self):
         super().close()
@@ -74,7 +73,7 @@ class TMCParser(ContainerParser):
         self.nodelay.close()
         self.glblmtx.close()
         self.bnofsmtx.close()
-        if x := getattr(self, 'mtrlchng', b''): x.close()
+        if x := getattr(self, 'mtrlchng', None): x.close()
 
 class TMCMetaData(NamedTuple):
     unknown0x0: int
@@ -85,7 +84,7 @@ class TMCMetaData(NamedTuple):
     name: bytes
 
 class MdlGeoParser(ContainerParser):
-    def __init__(self, data, ldata = b''):
+    def __init__(self, data):
         super().__init__(b'MdlGeo', data)
         self.chunks = tuple( ObjGeoParser(c) for c in self._chunks )
 
@@ -372,48 +371,56 @@ class IdxLayParser(ContainerParser):
         # vertex buffer N, i.e., if N < 1<<16 then s is 2 bytes, otherwise it's 4 bytes.
 
 class MtrColParser(ContainerParser):
-    def __init__(self, data, ldata = b''):
+    def __init__(self, data):
         super().__init__(b'MtrCol', data)
         self.chunks = tuple( MtrColParser._make_chunk(c) for c in self._chunks )
 
     @staticmethod
     def _make_chunk(c):
-        mtrcol_index, xref_count = struct.unpack_from('< iI', c, 0xd0)
+        xref_count, = struct.unpack_from('< I', c, 0xd4)
         xrefs = struct.unpack_from(f'<' + xref_count*'iI', c, 0xd8)
-        xrefs = tuple(xrefs[i:i+2] for i in range(0, len(xrefs), 2))
         return MtrColChunk(
                 struct.unpack_from('< 4f', c),
                 struct.unpack_from('< 4f', c, 0x10),
                 struct.unpack_from('< 4f', c, 0x20),
+                struct.unpack_from('< 4f', c, 0x30),
+                struct.unpack_from('< 4f', c, 0x40),
+                struct.unpack_from('< 4f', c, 0x50),
                 *struct.unpack_from('< ff', c, 0x68),
+                struct.unpack_from('< 4f', c, 0x70),
                 struct.unpack_from('< 4f', c, 0x80),
                 struct.unpack_from('< 4f', c, 0x90),
-                mtrcol_index, xrefs)
+                struct.unpack_from('< 4f', c, 0xa0),
+                struct.unpack_from('< 4f', c, 0xb0),
+                struct.unpack_from('< 4f', c, 0xc0),
+                *struct.unpack_from('< i', c, 0xd0),
+                tuple(xrefs[i:i+2] for i in range(0, len(xrefs), 2))
+        )
 
 class MtrColChunk(NamedTuple):
     emission: tuple[float]
     specular: tuple[float]
     specular_power: tuple[float]
-    # unknown0x30: tuple[float]
-    # unknown0x40: tuple[float]
-    # unknown0x50: tuple[float]
+    unknown0x30: tuple[float]
+    unknown0x40: tuple[float]
+    unknown0x50: tuple[float]
     # address0x60
-    # unknown0x70: tuple[float]
     specular_glow_power: float
     diffuse_glow_power: float
+    unknown0x70: tuple[float]
 
     coat: tuple[float]
     sheen: tuple[float]
-    # unknown0xa0: tuple[float]
-    # unknown0xb0: tuple[float]
-    # unknown0xc0: tuple[float]
+    unknown0xa0: tuple[float]
+    unknown0xb0: tuple[float]
+    unknown0xc0: tuple[float]
     mtrcol_chunk_index: int
     # Each tuple has (objindex, count)
     # that means the mtrcol is used by "objindex" "count" times
     xrefs: tuple[tuple[int, int]]
 
 class MdlInfoParser(ContainerParser):
-    def __init__(self, data, ldata = b''):
+    def __init__(self, data):
         super().__init__(b'MdlInfo', data)
         self.chunks = tuple( ObjInfoParser(c) for c in self._chunks )
 
@@ -474,7 +481,7 @@ class ObjInfoChunk(NamedTuple):
     pass
 
 class HieLayParser(ContainerParser):
-    def __init__(self, data, ldata = b''):
+    def __init__(self, data):
         super().__init__(b'HieLay', data)
         self.chunks = tuple( HieLayParser._make_chunk(c) for c in self._chunks )
 
@@ -503,35 +510,15 @@ class LHeaderParser(ContainerParser):
         chunk_type_id_table = self._metadata[o1:o2].cast('I')
         for c, t in zip(self._chunks, chunk_type_id_table):
             match t:
-                case 0xC000_0001:
-                    self.mdlgeo = c
                 case 0xC000_0002:
                     self.ttdl = c
                 case 0xC000_0003:
                     self.vtxlay = c
                 case 0xC000_0004:
                     self.idxlay = c
-                case 0xC000_0005:
-                    self.mtrcol = c
-                case 0xC000_0006:
-                    self.mdlinfo = c
-                case 0xC000_0010:
-                    self.hielay = c
-                case 0xC000_0030:
-                    self.nodelay = c
-                case 0xC000_0040:
-                    self.glblmtx = c
-                case 0xC000_0050:
-                    self.bnofsmtx = c
-                case 0xC000_0060:
-                    self.cpf = c
-                case 0xC000_0070:
-                    self.mcapack = c
-                case 0xC000_0080:
-                    self.renpack = c
 
 class NodeLayParser(ContainerParser):
-    def __init__(self, data, ldata = b''):
+    def __init__(self, data):
         super().__init__(b'NodeLay', data)
         self.chunks = tuple( NodeObjParser(c) for c in self._chunks )
 
@@ -569,20 +556,20 @@ class NodeObjChunk(NamedTuple):
     node_group: tuple[int]
     
 class GlblMtxParser(ContainerParser):
-    def __init__(self, data, ldata = b''):
+    def __init__(self, data):
         super().__init__(b'GlblMtx', data)
         self.chunks = tuple( struct.unpack_from('< 16f', c) for c in self._chunks )
 
 class BnOfsMtxParser(ContainerParser):
-    def __init__(self, data, ldata = b''):
+    def __init__(self, data):
         super().__init__(b'BnOfsMtx', data)
         self.chunks = tuple( struct.unpack_from('< 16f', c) for c in self._chunks )
 
 # NGS2 specific data parsers below
 
 class OBJ_TYPE_INFOParser:
-    def __init__(self, table_info, table):
-        X = struct.unpack_from('HH HH HH HH HH HH HH HH', table_info)
+    def __init__(self, table_head, table):
+        X = struct.unpack_from('HH HH HH HH HH HH HH HH', table_head)
         X = [ (X[i], X[i+1]) for i in range(0, len(X), 2) ]
         X.sort(key=lambda x: x[0])
         n = sum( x[1] for x in X )
@@ -599,25 +586,16 @@ class OBJ_TYPE(IntEnum):
     WPB = 7
 
 class MTRLCHNGParser(ContainerParser):
-    def __init__(self, data, ldata = b''):
+    def __init__(self, data):
         super().__init__(b'MTRLCHNG', data)
         self.metadata = MTRLCHNGMetaData(*struct.unpack_from('< HHIII', self._metadata))
-        c = self._chunks[2]
         m = self.metadata.variant_count
         n = self.metadata.element_count
-        self.color_variants = tuple( tuple(
-            MTRLCHNGParser._make_element( c[(n*i+j)*0xd0:(n*i+(j+1))*0xd0]) for j in range(n)
-        ) for i in range(m) )
-
-    @staticmethod
-    def _make_element(c):
-        return MTRLCHNGElement(
-                struct.unpack_from('< 4f', c),
-                struct.unpack_from('< 4f', c, 0x10),
-                struct.unpack_from('< 4f', c, 0x20),
-                *struct.unpack_from('< ff', c, 0x68),
-                struct.unpack_from('< 4f', c, 0x80),
-                struct.unpack_from('< 4f', c, 0x90))
+        C = tuple(
+                MtrColParser._make_chunk(self._chunks[2][o:o+0xd0].tobytes() + bytes(0x10))
+                for o in range(0, m*n*0xd0, 0xd0)
+        )
+        self.color_variants = tuple( C[i*n:(i+1)*n] for i in range(m) )
 
 class MTRLCHNGMetaData(NamedTuple):
     unknown0x0: int
@@ -625,22 +603,3 @@ class MTRLCHNGMetaData(NamedTuple):
     unknown0x4: int
     variant_count: int
     element_count: int
-
-# Same as MtrColChunk but w/o mtrcol_index and xrefs
-class MTRLCHNGElement(NamedTuple):
-    emission: tuple[float]
-    specular: tuple[float]
-    specular_power: tuple[float]
-    # unknown0x30: tuple[float]
-    # unknown0x40: tuple[float]
-    # unknown0x50: tuple[float]
-    # address0x60
-    # unknown0x70: tuple[float]
-    specular_glow_power: float
-    diffuse_glow_power: float
-
-    coat: tuple[float]
-    sheen: tuple[float]
-    # unknown0xa0: tuple[float]
-    # unknown0xb0: tuple[float]
-    # unknown0xc0: tuple[float]

@@ -267,6 +267,7 @@ def import_tmc(context, tmc):
             base_spec_mix.parent = shader_frame
             base_spec_mix.data_type = 'RGBA'
             base_spec_mix.blend_type = 'MULTIPLY'
+            base_spec_mix.inputs[0].default_value = 1
             m.node_tree.links.new(base_spec_mix.outputs['Result'], pbsdf.inputs['Base Color'])
 
             base_color_mix = m.node_tree.nodes.new('ShaderNodeMix')
@@ -274,7 +275,6 @@ def import_tmc(context, tmc):
             base_color_mix.parent = shader_frame
             base_color_mix.data_type = 'RGBA'
             base_color_mix.blend_type = 'SCREEN'
-            m.node_tree.links.new(base_color_mix.outputs['Result'], base_spec_mix.inputs['Factor'])
             m.node_tree.links.new(base_color_mix.outputs['Result'], base_spec_mix.inputs['A'])
 
             spec_mix = m.node_tree.nodes.new('ShaderNodeMix')
@@ -331,8 +331,8 @@ def import_tmc(context, tmc):
                                 base_color_albedo_uv = uv.uv_map
 
                         if t.color_usage == 0:
-                            ti.label = frame.label = 'Diffuse Texture (Soft Light)'
-                            albedo_mix.blend_type = 'SOFT_LIGHT'
+                            ti.label = frame.label = 'Diffuse Texture (Light)'
+                            albedo_mix.blend_type = 'LINEAR_LIGHT'
                         elif t.color_usage == 1:
                             ti.label = frame.label = 'Diffuse Texture (Screen)'
                             albedo_mix.blend_type = 'SCREEN'
@@ -374,14 +374,16 @@ def import_tmc(context, tmc):
                         mix.parent = textures_frame
                         mix.data_type = 'RGBA'
                         mix.blend_type = 'ADD'
-                        mix.inputs['Factor'].default_value = 1
+                        mix.inputs['Factor'].default_value = 0
+                        m.node_tree.links.new(ti.outputs['Color'], mix.inputs['Factor'])
                         if is_shadow:
-                            m.node_tree.links.new(base_color_albedo.outputs['Alpha'], mix.inputs['A'])
                             mul = m.node_tree.nodes.new('ShaderNodeMath')
                             mul.operation = 'MULTIPLY'
                             m.node_tree.links.new(ti.outputs['Color'], mul.inputs[0])
                             m.node_tree.links.new(ti.outputs['Alpha'], mul.inputs[1])
                             m.node_tree.links.new(mul.outputs[0], pbsdf.inputs['Alpha'])
+                            m.node_tree.links.new(base_color_albedo.outputs['Alpha'], mix.inputs['A'])
+                            m.node_tree.links.new(base_color_albedo.outputs['Color'], mix.inputs['Factor'])
                         else:
                             m.node_tree.links.new(base_color_albedo.outputs['Color'], mix.inputs['A'])
                         m.node_tree.links.new(ti.outputs['Color'], mix.inputs['B'])
@@ -395,12 +397,12 @@ def import_tmc(context, tmc):
     except AttributeError:
         pass
     else:
-        for mtrc in V:
+        for var in V:
             C = bpy.data.collections.new(tmc_name)
             collection_top.children.link(C)
             M = { m: m.copy() for m in objgeo_params_to_material.values() }
             for m in M.values():
-                set_material_parameters(m, mtrc[m["mtrcol"]])
+                set_material_parameters(m, var[m["mtrcol"]])
             for i, mo in enumerate(mesh_objs):
                 o = mo.copy()
                 C.objects.link(o)
