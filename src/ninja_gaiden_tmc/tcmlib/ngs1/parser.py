@@ -185,7 +185,7 @@ class TextureUsage(IntEnum):
     Albedo = 0
     Normal = 1
     Smoothness = 2
-    Add = 3
+    AlphaBlend = 3
 
 class GeoDeclParser(ContainerParser):
     def __init__(self, data):

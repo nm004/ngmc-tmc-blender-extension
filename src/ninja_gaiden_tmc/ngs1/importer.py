@@ -7,8 +7,7 @@ from ..tcmlib.ngs1 import (
 )
 import bpy
 import bmesh
-from bpy_extras.io_utils import axis_conversion
-from mathutils import Matrix, Vector
+from mathutils import Matrix, Vector, Euler
 
 import math
 import os, tempfile
@@ -18,6 +17,8 @@ def import_tmc(context, tmc, g1tg):
     tmc_name = tmc.metadata.name.decode()
     collection_top = bpy.data.collections.new(tmc_name)
     context.collection.children.link(collection_top)
+
+    yup_to_zup = Euler((.5 * math.pi, 0, 0)).to_matrix().to_4x4()
 
     # We form an armature.
     a = bpy.data.armatures.new(tmc_name)
@@ -42,7 +43,6 @@ def import_tmc(context, tmc, g1tg):
         m.transpose()
 
     active_obj_saved = context.view_layer.objects.active
-    armature_obj.matrix_basis = axis_conversion(from_forward='-Z', from_up='Y').to_4x4()
     context.view_layer.objects.active = armature_obj
     bpy.ops.object.mode_set(mode='EDIT')
     bone_names = []
@@ -52,6 +52,8 @@ def import_tmc(context, tmc, g1tg):
         b.transform(mat)
         # We temporalily set obj type attribute for set_bones_tail function.
         b['obj_type'] = i
+
+    a.transform(yup_to_zup)
 
     R = []
     for i, (c, b) in enumerate(zip(tmc.hielay.chunks, a.edit_bones)):
@@ -85,7 +87,6 @@ def import_tmc(context, tmc, g1tg):
         mesh_objs[i] = mesh_obj = bpy.data.objects.new(m.name, m)
         collection_base.objects.link(mesh_obj)
         mesh_obj.parent = armature_obj
-        mesh_obj.matrix_basis = mat
 
         b = armature_obj.data.bones[bone_names[i]]
         if objtype == OBJ_TYPE.SUP or objtype == OBJ_TYPE.WGT:
@@ -175,7 +176,6 @@ def import_tmc(context, tmc, g1tg):
                     case D3DDECLUSAGE.TANGENT:
                         pass
                     case D3DDECLUSAGE.COLOR:
-                        print('bbbbbbbbbbb')
                         pass
                     case x:
                         raise Exception(f'Not supported vert decl usage: {repr(x)}')
@@ -194,6 +194,12 @@ def import_tmc(context, tmc, g1tg):
         mesh_obj.data.normals_split_custom_set_from_vertices(tuple(v.normal for v in bm.verts))
         bm.free()
 
+        mesh_obj.matrix_basis = mat
+        mesh_obj.location = mesh_obj.location.xzy * Vector((1, -1, 1))
+        r = mesh_obj.rotation_euler
+        mesh_obj.rotation_euler = Euler((r.x, -r.z, r.y))
+        mesh_obj.data.transform(yup_to_zup)
+
     # We load textures
     # TODO: Use delete_on_close=False instead of delete=False when Blender has begun to ship Python 3.12
     images = []
@@ -203,6 +209,7 @@ def import_tmc(context, tmc, g1tg):
             with open(t.name, t.file.mode) as f:
                 f.write(x)
             x = bpy.data.images.load(t.name)
+            x.colorspace_settings.is_data = True
             x.name = tmc_name
             x.pack()
             x.filepath_raw = ''
@@ -232,136 +239,123 @@ def import_tmc(context, tmc, g1tg):
             shader_frame = m.node_tree.nodes.new('NodeFrame')
             pbsdf = m.node_tree.nodes["Principled BSDF"]
             pbsdf.parent = shader_frame
+            pbsdf.inputs['Alpha'].default_value = 0
             pbsdf.distribution = 'GGX'
-            pbsdf.inputs['Specular IOR Level'].default_value = 1
 
-            base_spec_mix = m.node_tree.nodes.new('ShaderNodeMix')
-            base_spec_mix.name = 'mtrcol_base_spec'
-            base_spec_mix.parent = shader_frame
-            base_spec_mix.data_type = 'RGBA'
-            base_spec_mix.blend_type = 'MULTIPLY'
-            base_spec_mix.inputs[0].default_value = .9
-            m.node_tree.links.new(base_spec_mix.outputs['Result'], pbsdf.inputs['Base Color'])
+            ao = m.node_tree.nodes.new('ShaderNodeAmbientOcclusion')
+            ao.parent = shader_frame
+            m.node_tree.links.new(ao.outputs['Color'], pbsdf.inputs['Base Color'])
 
-            base_color_mix = m.node_tree.nodes.new('ShaderNodeMix')
-            base_color_mix.name = 'mtrcol_base_color'
-            base_color_mix.parent = shader_frame
-            base_color_mix.data_type = 'RGBA'
-            base_color_mix.blend_type = 'LINEAR_LIGHT'
-            m.node_tree.links.new(base_color_mix.outputs['Result'], base_spec_mix.inputs['A'])
+            gam = m.node_tree.nodes.new('ShaderNodeGamma')
+            gam.parent = shader_frame
+            gam.inputs['Gamma'].default_value = 2.2
+            m.node_tree.links.new(gam.outputs['Color'], ao.inputs['Color'])
 
-            spec_mix = m.node_tree.nodes.new('ShaderNodeMix')
-            spec_mix.name = 'mtrcol_specular'
-            spec_mix.parent = shader_frame
-            spec_mix.data_type = 'RGBA'
-            spec_mix.blend_type = 'MULTIPLY'
-            spec_mix.inputs['Factor'].default_value = 1
-            m.node_tree.links.new(spec_mix.outputs['Result'], pbsdf.inputs['Specular Tint'])
+            mul_add = m.node_tree.nodes.new('ShaderNodeVectorMath')
+            mul_add.name = 'mtrcol_multiply_add'
+            mul_add.parent = shader_frame
+            mul_add.operation = 'MULTIPLY_ADD'
+            m.node_tree.links.new(mul_add.outputs['Vector'], gam.inputs['Color'])
 
             set_material_parameters(m, mtrcol_chunk)
 
             uv_idx = 0
             uvnames = [ 'UVMap', 'UVMap.001', 'UVMap.002', 'UVMap.003' ]
 
-            textures_frame = m.node_tree.nodes.new('NodeFrame')
-            textures_frame.label = 'Textures'
             for t in c.texture_info_table:
-                ti = m.node_tree.nodes.new('ShaderNodeTexImage')
+                imgtex = m.node_tree.nodes.new('ShaderNodeTexImage')
                 try:
-                    ti.image = images[t.texture_index]
+                    imgtex.image = images[t.texture_index]
                 except IndexError:
                     assert t.texture_index == -1
-                    m.node_tree.nodes.remove(ti)
+                    m.node_tree.nodes.remove(imgtex)
                     continue
                 frame = m.node_tree.nodes.new('NodeFrame')
-                frame.parent = textures_frame
-                ti.parent = frame
+                imgtex.parent = frame
 
                 uv = m.node_tree.nodes.new('ShaderNodeUVMap')
                 uv.uv_map = uvnames[uv_idx]
                 uv_idx += 1
                 uv.parent = frame
-                m.node_tree.links.new(uv.outputs['UV'], ti.inputs['Vector'])
+                m.node_tree.links.new(uv.outputs['UV'], imgtex.inputs['Vector'])
 
+                # We assume that "Colored with alpha" or "Alpha only" texture come first.
                 match t.usage:
                     case TextureUsage.Albedo:
-                        if t.color_usage == 0 or t.color_usage == 1:
-                            albedo_mix = m.node_tree.nodes.new('ShaderNodeMix')
-                            albedo_mix.parent = textures_frame
-                            albedo_mix.data_type = 'RGBA'
-                            albedo_mix.blend_type = 'ADD'
-                            albedo_mix.inputs['B'].default_value = 4*(0,)
-                            m.node_tree.links.new(base_color_albedo.outputs['Color'], albedo_mix.inputs['Factor'])
-                            m.node_tree.links.new(base_color_albedo.outputs['Color'], albedo_mix.inputs['A'])
-                            m.node_tree.links.new(ti.outputs['Color'], albedo_mix.inputs['B'])
-                            m.node_tree.links.new(albedo_mix.outputs['Result'], base_color_mix.inputs['Factor'])
-                            m.node_tree.links.new(albedo_mix.outputs['Result'], base_color_mix.inputs['A'])
-                        else:
-                            if not base_color_mix.inputs['A'].is_linked:
-                                m.node_tree.links.new(ti.outputs['Color'], base_color_mix.inputs['Factor'])
-                                m.node_tree.links.new(ti.outputs['Color'], base_color_mix.inputs['A'])
-                                base_color_albedo = ti
-                                base_color_albedo_uv = uv.uv_map
-
-                        if t.color_usage == 0:
-                            ti.label = frame.label = 'Diffuse Texture (Light)'
-                            albedo_mix.blend_type = 'LINEAR_LIGHT'
-                        elif t.color_usage == 1:
-                            ti.label = frame.label = 'Diffuse Texture (Screen)'
-                            albedo_mix.blend_type = 'SCREEN'
-                        elif t.color_usage == 3:
-                            ti.label = frame.label = 'Diffuse Texture (Shadow)'
-                            m.node_tree.links.new(ti.outputs['Color'], pbsdf.inputs['Alpha'])
-                            is_shadow = True
-                        elif t.color_usage == 5:
-                            ti.label = frame.label = 'Diffuse Texture'
-                            m.node_tree.links.new(ti.outputs['Alpha'], pbsdf.inputs['Alpha'])
-                            is_shadow = False
-                        else:
+                        if t.color_usage not in { 0, 1, 3, 5 }:
                             raise Exception(f'Not supported albedo texture type: {repr(t.color_usage)}')
+
+                        if t.color_usage == 0 or t.color_usage == 1:
+                            mix = m.node_tree.nodes.new('ShaderNodeMix')
+                            mix.parent = frame
+                            mix.data_type = 'RGBA'
+                            mix.inputs['Factor'].default_value = 1
+                            m.node_tree.links.new(albedo_out, mix.inputs['A'])
+                            m.node_tree.links.new(imgtex.outputs['Color'], mix.inputs['B'])
+                            m.node_tree.links.new(mix.outputs['Result'], mul_add.inputs['Vector'])
+                            if t.color_usage == 0:
+                                frame.label = 'Black and White'
+                                mix.blend_type= 'MULTIPLY'
+                            elif t.color_usage == 1:
+                                frame.label = 'Light'
+                                mix.blend_type= 'LINEAR_LIGHT'
+                        else:
+                            if not mul_add.inputs['Vector'].is_linked:
+                                vecm = m.node_tree.nodes.new('ShaderNodeVectorMath')
+                                vecm.parent = frame
+                                vecm.operation = 'MULTIPLY_ADD'
+                                m.node_tree.links.new(vecm.outputs['Vector'], mul_add.inputs['Vector'])
+                                albedo_uv = uv.uv_map
+                                albedo_out = vecm.outputs['Vector']
+                            if t.color_usage == 3:
+                                frame.label = 'Alpha only'
+                                m.node_tree.links.new(imgtex.outputs['Color'], vecm.inputs[0])
+                                m.node_tree.links.new(imgtex.outputs['Alpha'], vecm.inputs[1])
+                                m.node_tree.links.new(vecm.outputs[0], pbsdf.inputs['Alpha'])
+                                albedo_in = vecm.inputs[0]
+                            elif t.color_usage == 5:
+                                if not vecm.inputs[0].is_linked:
+                                    frame.label = 'Colored with alpha'
+                                    m.node_tree.links.new(imgtex.outputs['Color'], vecm.inputs[0])
+                                    m.node_tree.links.new(imgtex.outputs['Alpha'], vecm.inputs[1])
+                                    m.node_tree.links.new(imgtex.outputs['Alpha'], pbsdf.inputs['Alpha'])
+                                    albedo_in = vecm.inputs[2]
+                                else:
+                                    frame.label = 'Unused overlay'
                     case TextureUsage.Normal:
-                        ti.label = frame.label = 'Normal Texture'
-                        ti.image.colorspace_settings.name = 'Non-Color'
+                        frame.label = 'Normal'
                         nml = m.node_tree.nodes.new('ShaderNodeNormalMap')
                         nml.parent = frame
                         nml.uv_map = uv.uv_map
-                        curv = m.node_tree.nodes.new('ShaderNodeRGBCurve')
-                        curv.parent = frame
-                        curv.mapping.curves[1].points[0].location = (0, 1)
-                        curv.mapping.curves[1].points[1].location = (1, 0)
+                        vecm = m.node_tree.nodes.new('ShaderNodeVectorMath')
+                        vecm.parent = frame
+                        vecm.operation = 'MULTIPLY_ADD'
+                        vecm.inputs[1].default_value = (1, -1, 1)
+                        vecm.inputs[2].default_value = (0, 1, 0)
                         m.node_tree.links.new(nml.outputs['Normal'], pbsdf.inputs['Normal'])
-                        m.node_tree.links.new(curv.outputs['Color'], nml.inputs['Color'])
-                        m.node_tree.links.new(ti.outputs['Color'], curv.inputs['Color'])
+                        m.node_tree.links.new(vecm.outputs['Vector'], nml.inputs['Color'])
+                        m.node_tree.links.new(imgtex.outputs['Color'], vecm.inputs['Vector'])
                     case TextureUsage.Smoothness:
-                        ti.label = frame.label = 'Smoothness Texture'
-                        ti.image.colorspace_settings.name = 'Non-Color'
-                        inv = m.node_tree.nodes.new('ShaderNodeInvert')
+                        frame.label = 'Smoothness'
+                        inv = m.node_tree.nodes.new('ShaderNodeVectorMath')
                         inv.parent = frame
-                        inv.inputs['Fac'].default_value = 4
-                        m.node_tree.links.new(inv.outputs['Color'], pbsdf.inputs['Roughness'])
-                        m.node_tree.links.new(ti.outputs['Color'], inv.inputs['Color'])
-                    case TextureUsage.Add:
-                        ti.label = frame.label = 'Additive Texture'
-                        uv.uv_map = base_color_albedo_uv
-                        mix = m.node_tree.nodes.new('ShaderNodeMix')
-                        mix.parent = textures_frame
-                        mix.data_type = 'RGBA'
-                        mix.blend_type = 'ADD'
-                        mix.inputs['Factor'].default_value = 0
-                        m.node_tree.links.new(ti.outputs['Color'], mix.inputs['Factor'])
-                        if is_shadow:
-                            mul = m.node_tree.nodes.new('ShaderNodeMath')
-                            mul.operation = 'MULTIPLY'
-                            m.node_tree.links.new(ti.outputs['Color'], mul.inputs[0])
-                            m.node_tree.links.new(ti.outputs['Alpha'], mul.inputs[1])
-                            m.node_tree.links.new(mul.outputs[0], pbsdf.inputs['Alpha'])
-                            m.node_tree.links.new(base_color_albedo.outputs['Alpha'], mix.inputs['A'])
-                            m.node_tree.links.new(base_color_albedo.outputs['Color'], mix.inputs['Factor'])
-                        else:
-                            m.node_tree.links.new(base_color_albedo.outputs['Color'], mix.inputs['A'])
-                        m.node_tree.links.new(ti.outputs['Color'], mix.inputs['B'])
-                        m.node_tree.links.new(mix.outputs['Result'], base_color_mix.inputs['Factor'])
-                        m.node_tree.links.new(mix.outputs['Result'], base_color_mix.inputs['A'])
+                        inv.operation = 'SUBTRACT'
+                        inv.inputs[0].default_value = (1, 1, 1)
+                        grad = m.node_tree.nodes.new('ShaderNodeTexGradient')
+                        grad.parent = frame
+                        grad.gradient_type = 'LINEAR'
+                        m.node_tree.links.new(imgtex.outputs['Color'], inv.inputs[1])
+                        m.node_tree.links.new(inv.outputs[0], grad.inputs['Vector'])
+                        m.node_tree.links.new(grad.outputs['Color'], pbsdf.inputs['Roughness'])
+                    case TextureUsage.AlphaBlend:
+                        frame.label = 'Alpha Blend'
+                        uv.uv_map = albedo_uv
+                        mul = m.node_tree.nodes.new('ShaderNodeMath')
+                        mul.parent = frame
+                        mul.operation = 'MULTIPLY'
+                        m.node_tree.links.new(imgtex.outputs['Color'], mul.inputs[0])
+                        m.node_tree.links.new(imgtex.outputs['Alpha'], mul.inputs[1])
+                        m.node_tree.links.new(mul.outputs[0], albedo_in)
                     case x:
                         raise Exception(f'Not supported texture map usage: {repr(x)}')
 
@@ -387,21 +381,16 @@ def import_tmc(context, tmc, g1tg):
                 for j, ms in enumerate(o.material_slots):
                     ms.material = M[ms.material]
 
-
 def set_material_parameters(material, mtrcol_chunk):
+    n = material.node_tree.nodes['mtrcol_multiply_add']
+    n.inputs[1].default_value = 1.375 * Vector(mtrcol_chunk.specular[:3])
+    n.inputs[2].default_value = .375 * Vector(mtrcol_chunk.emission[:3])
+
     n = material.node_tree.nodes['Principled BSDF']
-    n.inputs['Metallic'].default_value = min(math.log10(1+Vector(mtrcol_chunk.specular_power[:3]).length), 1)
-    n.inputs['IOR'].default_value = max(min(math.log10(1+mtrcol_chunk.specular_power[3]), 4), 1)
-
-    n = material.node_tree.nodes['mtrcol_base_spec']
-    n.inputs['B'].default_value = mtrcol_chunk.specular
-
-    n = material.node_tree.nodes['mtrcol_base_color']
-    n.inputs['B'].default_value = mtrcol_chunk.emission
-
-    n = material.node_tree.nodes['mtrcol_specular']
-    n.inputs['A'].default_value = mtrcol_chunk.specular
-    n.inputs['B'].default_value = mtrcol_chunk.specular_power
+    v = Vector( mtrcol_chunk.specular_power[:3] )
+    n.inputs['Metallic'].default_value = max(1 - v.normalized().length / (v.length + 1e-38), 0)
+    n.inputs['IOR'].default_value = min(max(math.log10(1e-38+mtrcol_chunk.specular_power[3]), 1), 6)
+    n.inputs['Specular Tint'].default_value = Vector( v**.454 for v in Vector(mtrcol_chunk.specular) * Vector(mtrcol_chunk.specular_power) )
 
 # Ref: https://github.com/VitaSmith/gust_tools
 def generate_dds_images_from_g1tg(g1tg):
@@ -456,11 +445,15 @@ def set_bones_tail(b):
             b.tail = b.head + b.parent.matrix.to_3x3() @ Vector((0, x, 0))
         except AttributeError:
             b.tail = (0, .01, 0)
-    elif n == 1:
-        b.tail = b.children[0].head
     else:
         H = tuple( c.head for c in C )
         b.tail = sum(H, Vector()) / len(H)
+
+    if b.length < 0.01:
+        try:
+            b.tail = b.head + b.parent.matrix.to_3x3() @ Vector((0, 0.01, 0))
+        except AttributeError:
+            b.tail = (0, .01, 0)
 
     for c in b.children:
         set_bones_tail(c)

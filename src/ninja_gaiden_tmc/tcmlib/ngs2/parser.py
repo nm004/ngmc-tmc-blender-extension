@@ -148,7 +148,7 @@ class ObjGeoChunk(NamedTuple):
     #geodecl_chunk_address0x38
     geodecl_chunk_index: int
 
-    unknown0x40: int
+    colored_transparency: bool
     unknown0x44: int
     unknown0x48: int
     unknown0x4c: int
@@ -241,7 +241,7 @@ class TextureUsage(IntEnum):
     Albedo = 0
     Normal = 1
     Smoothness = 2
-    Add = 3
+    AlphaBlend = 3
 
 class GeoDeclParser(ContainerParser):
     def __init__(self, data):
